@@ -28,6 +28,7 @@
 */
 
 #include "tflite_posenet.h"
+#include <math.h>       /* atan2 */
 
 namespace mle {
 
@@ -274,6 +275,88 @@ int32_t TFLPoseNet::PostProcess(GstBuffer* buffer) {
             return MLE_FAIL;
         }
         meta->score = pose_results_[i].poseScore;
+        /*
+        Detect Fall using angle between hip and shoulders!
+        */
+        std::vector<int> shoulder_indices{5,6};
+        std::vector<int> hip_indices{11,12};
+        float keypoint_score_th = 0.3;
+        for (auto shoulder_idx : shoulder_indices) {
+            if(pose_results_[i].keypointScore[shoulder_idx] < keypoint_score_th) {
+                continue;
+            }
+            for (auto hip_idx : hip_indices) {
+                if(pose_results_[i].keypointScore[hip_idx] < keypoint_score_th) {
+                    continue;
+                }
+                float hip_shoulder_angle_thresh = 140;
+                if(hip_idx - shoulder_idx == 6) {
+                    hip_shoulder_angle_thresh = 130;
+                }
+                float hip_x = pose_results_[i].keypointCoord[hip_idx * 2];
+                float hip_y = pose_results_[i].keypointCoord[hip_idx * 2 + 1];
+                float shoulder_x = pose_results_[i].keypointCoord[shoulder_idx * 2];
+                float shoulder_y = pose_results_[i].keypointCoord[shoulder_idx * 2 + 1];
+                float angle = atan2(hip_y-shoulder_y, hip_x-shoulder_x) * 180 / PI;
+                if(angle > thresh){
+                    // Fall detected if this condition is true!
+                    // TODO(NITHIN/swinata): Try visualize this
+                     printf("Detected Fall!!!\n");
+                }
+            }
+        }
+        /*
+        End detection of fall using hip and shoulder angle
+        */
+
+        /*
+        Begin Detect fall based on head-shoulder proximity.
+        If shoulder is close to head means body is horizontal and has fall flat
+        */
+
+        // Obtaining average vertical position of head from averaging head_key_points.
+        float head_sum_y = 0.0;
+        int head_count = 0;
+        std::vector<int> head_indices{0,1,2,3,4};
+        for (auto head_idx : head_indices) {
+            if(pose_results_[i].keypointScore[head_idx] < keypoint_score_th) {
+                continue;
+            }
+            head_sum_y += pose_results_[i].keypointCoord[head_idx * 2 + 1];
+            head_count++;
+        }
+        float head_average_y = head_sum_y/head_count;
+
+        // If both shoulder found, find the length to be used as ratio for more accurate thresh.
+        float shoulder_width = 1.0;
+        if(pose_results_[i].keypointScore[shoulder_indices[0]] > keypoint_score_th &&
+            pose_results_[i].keypointScore[shoulder_indices[1]] > keypoint_score_th) {
+            shoulder_width = pose_results_[i].keypointCoord[shoulder_indices[0] * 2] - pose_results_[i].keypointCoord[shoulder_indices[1] * 2];
+            shoulder_width = shoulder_width/source_params_.width*1.5;
+        }
+        if(shoulder_width > 1.0){
+            shoulder_width = 1.0;
+        }
+
+        // Check proximity between head and shoulder.
+        for(auto shoulder_idx : shoulder_indices) {
+            if (pose_results_[i].keypointScore[shoulder_idx] < keypoint_score_th){
+                continue;
+            }
+            float shoulder_y = keypoints[shoulder_idx]
+            if(shoulder_y - head_average_y < shoulder_width*80) {
+                // Fall detected if this condition is true!
+                // print(head_average_y-shoulder_y);
+                // cv.putText(debug_image,'Fallen front',(100,100),cv.FONT_HERSHEY_SIMPLEX,1,(255,255,0),2,cv.LINE_AA);
+                printf("Detected Fall!!!\n");
+            }
+        }
+
+        /*
+        End detect fall based on head-shoulder proximity.
+        */
+
+
 
         for (int j = 0; j < pose_pp_config_.numKeypoint; j++)
         {
